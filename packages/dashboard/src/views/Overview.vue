@@ -1,54 +1,60 @@
 <template>
   <div>
-    <h1>Dashboard Overview</h1>
+    <h1>📊 统计总览</h1>
 
-    <div v-if="loading && !summary">Loading...</div>
+    <div v-if="loading && !summary">加载中...</div>
     <div v-else-if="error">{{ error }}</div>
     <div v-else>
-      <h2>Summary</h2>
+      <h2>汇总</h2>
       <table border="1" cellpadding="6" cellspacing="0">
-        <tr><td><b>Total Requests</b></td><td>{{ summary?.total_requests ?? 0 }}</td></tr>
-        <tr><td><b>Total Input Tokens</b></td><td>{{ fmtNum(summary?.total_input_tokens ?? 0) }}</td></tr>
-        <tr><td><b>Total Output Tokens</b></td><td>{{ fmtNum(summary?.total_output_tokens ?? 0) }}</td></tr>
-        <tr><td><b>Total Tokens</b></td><td>{{ fmtNum(summary?.total_tokens ?? 0) }}</td></tr>
-        <tr><td><b>Total Cost</b></td><td>${{ (summary?.total_cost_usd ?? 0).toFixed(6) }}</td></tr>
-        <tr><td><b>Avg Latency</b></td><td>{{ summary?.avg_latency_ms ?? 0 }}ms</td></tr>
-        <tr><td><b>Avg TTFB</b></td><td>{{ summary?.avg_ttfb_ms ?? 0 }}ms</td></tr>
-        <tr><td><b>Errors</b></td><td>{{ summary?.error_count ?? 0 }} ({{ (summary?.error_rate ?? 0).toFixed(1) }}%)</td></tr>
+        <tbody>
+          <tr><td><b>总请求数</b></td><td>{{ summary?.total_requests ?? 0 }}</td></tr>
+          <tr><td><b>输入 Token</b></td><td>{{ fmtNum(summary?.total_input_tokens ?? 0) }}</td></tr>
+          <tr><td><b>输出 Token</b></td><td>{{ fmtNum(summary?.total_output_tokens ?? 0) }}</td></tr>
+          <tr><td><b>总 Token</b></td><td>{{ fmtNum(summary?.total_tokens ?? 0) }}</td></tr>
+          <tr><td><b>总费用</b></td><td>${{ (summary?.total_cost_usd ?? 0).toFixed(6) }}</td></tr>
+          <tr><td><b>平均延迟</b></td><td>{{ summary?.avg_latency_ms ?? 0 }}ms</td></tr>
+          <tr><td><b>平均首字节</b></td><td>{{ summary?.avg_ttfb_ms ?? 0 }}ms</td></tr>
+          <tr><td><b>错误数</b></td><td>{{ summary?.error_count ?? 0 }} ({{ (summary?.error_rate ?? 0).toFixed(1) }}%)</td></tr>
+        </tbody>
       </table>
 
-      <h2>Per Model</h2>
+      <h2>按模型统计</h2>
       <table v-if="summary?.models?.length" border="1" cellpadding="6" cellspacing="0">
-        <tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
-        <tr v-for="m in summary.models" :key="m.model">
-          <td>{{ m.model }}</td>
-          <td>{{ fmtNum(m.requests) }}</td>
-          <td>{{ fmtNum(m.tokens) }}</td>
-          <td>${{ m.cost.toFixed(6) }}</td>
-        </tr>
+        <thead><tr><th>模型</th><th>请求数</th><th>Token</th><th>费用</th></tr></thead>
+        <tbody>
+          <tr v-for="m in summary.models" :key="m.model">
+            <td>{{ m.model }}</td>
+            <td>{{ fmtNum(m.requests) }}</td>
+            <td>{{ fmtNum(m.tokens) }}</td>
+            <td>${{ m.cost.toFixed(6) }}</td>
+          </tr>
+        </tbody>
       </table>
-      <p v-else>No data yet.</p>
+      <p v-else>暂无数据</p>
 
-      <h2>Trend Data</h2>
+      <h2>趋势数据</h2>
       <table v-if="trend.length" border="1" cellpadding="6" cellspacing="0">
-        <tr><th>Time</th><th>Model</th><th>Requests</th><th>Input Tokens</th><th>Output Tokens</th><th>Avg Latency</th><th>Cost</th></tr>
-        <tr v-for="t in trend" :key="t.ts + t.model">
-          <td>{{ fmtTs(t.ts) }}</td>
-          <td>{{ t.model }}</td>
-          <td>{{ t.requests }}</td>
-          <td>{{ fmtNum(t.input_tokens) }}</td>
-          <td>{{ fmtNum(t.output_tokens) }}</td>
-          <td>{{ t.avg_latency_ms }}ms</td>
-          <td>${{ (t.cost_usd ?? 0).toFixed(6) }}</td>
-        </tr>
+        <thead><tr><th>时间</th><th>模型</th><th>请求</th><th>输入Token</th><th>输出Token</th><th>平均延迟</th><th>费用</th></tr></thead>
+        <tbody>
+          <tr v-for="t in trend" :key="t.ts + t.model">
+            <td>{{ fmtTs(t.ts) }}</td>
+            <td>{{ t.model }}</td>
+            <td>{{ t.requests }}</td>
+            <td>{{ fmtNum(t.input_tokens) }}</td>
+            <td>{{ fmtNum(t.output_tokens) }}</td>
+            <td>{{ t.avg_latency_ms }}ms</td>
+            <td>${{ (t.cost_usd ?? 0).toFixed(6) }}</td>
+          </tr>
+        </tbody>
       </table>
-      <p v-else>No trend data yet.</p>
+      <p v-else>暂无趋势数据</p>
     </div>
 
     <p>
-      <button @click="refresh">Refresh</button>
-      <button @click="toggleAuto">{{ autoRefresh ? 'Stop Auto' : 'Auto Refresh' }}</button>
-      <span v-if="wsConnected">🔗 Live</span>
+      <button @click="refresh">刷新</button>
+      <button @click="toggleAuto">{{ autoRefresh ? '停止自动刷新' : '自动刷新' }}</button>
+      <span v-if="wsConnected"> 🔗 实时</span>
     </p>
   </div>
 </template>

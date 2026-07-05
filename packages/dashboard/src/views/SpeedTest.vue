@@ -1,30 +1,32 @@
 <template>
   <div>
-    <h1>Speed Test</h1>
+    <h1>⚡ 测速</h1>
 
-    <div v-if="loading && speedData.length === 0">Loading...</div>
+    <div v-if="loading && speedData.length === 0">加载中...</div>
     <div v-else>
       <h2>
-        Current Latency:
+        当前延迟:
         <b v-if="currentLatency !== null">{{ currentLatency }}ms</b>
         <b v-else>--</b>
       </h2>
 
-      <h3>Recent Tests</h3>
+      <h3>最近测试记录</h3>
       <table v-if="speedData.length" border="1" cellpadding="6" cellspacing="0">
-        <tr><th>Time</th><th>Target</th><th>Latency</th><th>TTFB</th><th>Status</th></tr>
-        <tr v-for="s in speedData.slice(0, 30)" :key="s.id">
-          <td>{{ new Date(s.timestamp).toLocaleString('zh-CN') }}</td>
-          <td>{{ s.target_url }}</td>
-          <td>{{ s.latency_ms }}ms</td>
-          <td>{{ s.ttfb_ms }}ms</td>
-          <td>{{ s.success ? '✅ OK' : '❌ FAIL' }}</td>
-        </tr>
+        <thead><tr><th>时间</th><th>目标</th><th>延迟</th><th>首字节</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr v-for="s in speedData.slice(0, 30)" :key="s.id">
+            <td>{{ new Date(s.timestamp).toLocaleString('zh-CN') }}</td>
+            <td>{{ s.target_url }}</td>
+            <td>{{ s.latency_ms }}ms</td>
+            <td>{{ s.ttfb_ms }}ms</td>
+            <td>{{ s.success ? '✅ 正常' : '❌ 失败' }}</td>
+          </tr>
+        </tbody>
       </table>
-      <p v-else>No speed test data yet.</p>
+      <p v-else>暂无测速数据</p>
     </div>
 
-    <p><button @click="refresh">Refresh</button></p>
+    <p><button @click="refresh">刷新</button></p>
   </div>
 </template>
 
