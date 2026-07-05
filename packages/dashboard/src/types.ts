@@ -47,6 +47,7 @@ export interface TrendPoint {
   input_tokens: number;
   output_tokens: number;
   avg_latency_ms: number;
+  avg_ttfb_ms: number;
   cost_usd: number;
 }
 

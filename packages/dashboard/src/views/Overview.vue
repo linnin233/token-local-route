@@ -1,118 +1,98 @@
 <template>
-  <div class="overview">
-    <h2 class="page-title">Dashboard Overview</h2>
+  <div>
+    <h1>Dashboard Overview</h1>
 
-    <!-- Hero Cards -->
-    <div class="hero-grid">
-      <HeroCard title="Total Requests" :value="summary?.total_requests ?? '--'" icon="📊" color="blue" />
-      <HeroCard title="Total Tokens" :value="fmtNum(summary?.total_tokens ?? 0)" icon="🎯" color="green" />
-      <HeroCard title="Total Cost" :value="'$' + (summary?.total_cost_usd?.toFixed(4) ?? '--')" icon="💰" color="yellow" />
-      <HeroCard title="Avg Latency" :value="summary?.avg_latency_ms ? summary.avg_latency_ms + 'ms' : '--'" icon="⚡" color="purple" />
-    </div>
-
-    <!-- Secondary stats -->
-    <div class="hero-grid hero-grid--small" v-if="summary">
-      <HeroCard title="Input Tokens" :value="fmtNum(summary.total_input_tokens)" icon="📥" color="blue" />
-      <HeroCard title="Output Tokens" :value="fmtNum(summary.total_output_tokens)" icon="📤" color="green" />
-      <HeroCard title="Error Rate" :value="summary.error_rate?.toFixed(1) + '%'" icon="❌" color="red" />
-      <HeroCard title="Avg TTFB" :value="summary.avg_ttfb_ms ? summary.avg_ttfb_ms + 'ms' : '--'" icon="⏱️" color="purple" />
-    </div>
-
-    <!-- Charts -->
-    <div class="charts-grid">
-      <div class="chart-card">
-        <h3>Token Trends</h3>
-        <TokenChart :data="trendData" :loading="loading" />
-      </div>
-      <div class="chart-card">
-        <h3>Latency Trends</h3>
-        <LatencyChart :data="trendData" :loading="loading" />
-      </div>
-    </div>
-
-    <!-- Per-model breakdown -->
-    <div v-if="summary?.models?.length" class="section">
-      <h3>Per-Model Breakdown</h3>
-      <table class="model-table">
-        <thead>
-          <tr><th>Model</th><th class="num">Requests</th><th class="num">Tokens</th><th class="num">Cost</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="m in summary.models" :key="m.model">
-            <td>{{ m.model }}</td>
-            <td class="num">{{ fmtNum(m.requests) }}</td>
-            <td class="num">{{ fmtNum(m.tokens) }}</td>
-            <td class="num">${{ m.cost.toFixed(4) }}</td>
-          </tr>
-        </tbody>
+    <div v-if="loading && !summary">Loading...</div>
+    <div v-else-if="error">{{ error }}</div>
+    <div v-else>
+      <h2>Summary</h2>
+      <table border="1" cellpadding="6" cellspacing="0">
+        <tr><td><b>Total Requests</b></td><td>{{ summary?.total_requests ?? 0 }}</td></tr>
+        <tr><td><b>Total Input Tokens</b></td><td>{{ fmtNum(summary?.total_input_tokens ?? 0) }}</td></tr>
+        <tr><td><b>Total Output Tokens</b></td><td>{{ fmtNum(summary?.total_output_tokens ?? 0) }}</td></tr>
+        <tr><td><b>Total Tokens</b></td><td>{{ fmtNum(summary?.total_tokens ?? 0) }}</td></tr>
+        <tr><td><b>Total Cost</b></td><td>${{ (summary?.total_cost_usd ?? 0).toFixed(6) }}</td></tr>
+        <tr><td><b>Avg Latency</b></td><td>{{ summary?.avg_latency_ms ?? 0 }}ms</td></tr>
+        <tr><td><b>Avg TTFB</b></td><td>{{ summary?.avg_ttfb_ms ?? 0 }}ms</td></tr>
+        <tr><td><b>Errors</b></td><td>{{ summary?.error_count ?? 0 }} ({{ (summary?.error_rate ?? 0).toFixed(1) }}%)</td></tr>
       </table>
+
+      <h2>Per Model</h2>
+      <table v-if="summary?.models?.length" border="1" cellpadding="6" cellspacing="0">
+        <tr><th>Model</th><th>Requests</th><th>Tokens</th><th>Cost</th></tr>
+        <tr v-for="m in summary.models" :key="m.model">
+          <td>{{ m.model }}</td>
+          <td>{{ fmtNum(m.requests) }}</td>
+          <td>{{ fmtNum(m.tokens) }}</td>
+          <td>${{ m.cost.toFixed(6) }}</td>
+        </tr>
+      </table>
+      <p v-else>No data yet.</p>
+
+      <h2>Trend Data</h2>
+      <table v-if="trend.length" border="1" cellpadding="6" cellspacing="0">
+        <tr><th>Time</th><th>Model</th><th>Requests</th><th>Input Tokens</th><th>Output Tokens</th><th>Avg Latency</th><th>Cost</th></tr>
+        <tr v-for="t in trend" :key="t.ts + t.model">
+          <td>{{ fmtTs(t.ts) }}</td>
+          <td>{{ t.model }}</td>
+          <td>{{ t.requests }}</td>
+          <td>{{ fmtNum(t.input_tokens) }}</td>
+          <td>{{ fmtNum(t.output_tokens) }}</td>
+          <td>{{ t.avg_latency_ms }}ms</td>
+          <td>${{ (t.cost_usd ?? 0).toFixed(6) }}</td>
+        </tr>
+      </table>
+      <p v-else>No trend data yet.</p>
     </div>
+
+    <p>
+      <button @click="refresh">Refresh</button>
+      <button @click="toggleAuto">{{ autoRefresh ? 'Stop Auto' : 'Auto Refresh' }}</button>
+      <span v-if="wsConnected">🔗 Live</span>
+    </p>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue';
-import HeroCard from '../components/HeroCard.vue';
-import TokenChart from '../components/TokenChart.vue';
-import LatencyChart from '../components/LatencyChart.vue';
 import { useApi } from '../composables/useApi';
 import { useWebSocket } from '../composables/useWebSocket';
 import type { StatsSummary, TrendPoint } from '../types';
 
-const { loading, fetchStatsSummary, fetchTrend } = useApi();
-const { lastRequest } = useWebSocket();
+const { loading, error, fetchStatsSummary, fetchTrend } = useApi();
+const { connected: wsConnected, lastRequest } = useWebSocket();
 
 const summary = ref<StatsSummary | null>(null);
-const trendData = ref<TrendPoint[]>([]);
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
+const trend = ref<TrendPoint[]>([]);
+const autoRefresh = ref(true);
+let timer: ReturnType<typeof setInterval> | null = null;
 
 async function refresh() {
   try {
-    const [s, t] = await Promise.all([
-      fetchStatsSummary(0),
-      fetchTrend('hour', 1),
-    ]);
+    const [s, t] = await Promise.all([fetchStatsSummary(0), fetchTrend('hour', 1)]);
     summary.value = s;
-    trendData.value = t;
-  } catch { /* silent */ }
+    trend.value = t;
+  } catch {}
 }
 
-// When WS pushes a new request, refresh stats
-watch(lastRequest, () => { refresh(); });
+function toggleAuto() {
+  autoRefresh.value = !autoRefresh.value;
+  if (autoRefresh.value) {
+    timer = setInterval(refresh, 10_000);
+  } else if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+watch(lastRequest, () => { if (autoRefresh.value) refresh(); });
 
 onMounted(() => {
   refresh();
-  refreshTimer = setInterval(refresh, 10_000);
+  timer = setInterval(refresh, 10_000);
 });
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer);
-});
+onUnmounted(() => { if (timer) clearInterval(timer); });
 
-function fmtNum(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return String(n);
-}
+function fmtNum(n: number): string { return n.toLocaleString(); }
+function fmtTs(ts: number): string { return new Date(ts).toLocaleString('zh-CN'); }
 </script>
-
-<style scoped>
-.overview { max-width: 1200px; }
-.page-title { font-size: 22px; font-weight: 600; margin-bottom: 24px; }
-.hero-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
-.hero-grid--small { grid-template-columns: repeat(4, 1fr); }
-.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0; }
-.chart-card {
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 20px;
-}
-.chart-card h3 { font-size: 15px; color: var(--text-secondary); margin: 0 0 16px 0; }
-.section { margin-top: 24px; }
-.section h3 { font-size: 15px; color: var(--text-secondary); margin-bottom: 12px; }
-.model-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.model-table th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--text-secondary); font-weight: 600; }
-.model-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
-.num { text-align: right; font-variant-numeric: tabular-nums; }
-@media (max-width: 900px) {
-  .hero-grid, .hero-grid--small { grid-template-columns: repeat(2, 1fr); }
-  .charts-grid { grid-template-columns: 1fr; }
-}
-</style>
