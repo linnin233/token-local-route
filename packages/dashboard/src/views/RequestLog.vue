@@ -1,44 +1,26 @@
 <template>
   <div>
-    <h1>请求日志</h1>
-
+    <h1>Request Log</h1>
     <p>
-      <span v-if="wsConnected">实时连接中</span>
-      <span v-else>未连接</span>
+      Model: <input v-model="f.model" @input="go" size="15" />
+      Status: <select v-model="f.status" @change="go"><option value="">All</option><option value="2xx">2xx</option><option value="4xx">4xx</option><option value="5xx">5xx</option></select>
+      Type: <select v-model="f.stream" @change="go"><option value="">All</option><option value="1">Stream</option><option value="0">Batch</option></select>
+      Source: <input v-model="f.app_source" @input="go" size="12" />
+      <button @click="fetch">Search</button>
     </p>
 
-    <p>
-      模型: <input v-model="filters.model" @input="onFilter" size="15" />
-      状态: <select v-model="filters.status" @change="onFilter">
-        <option value="">全部</option>
-        <option value="2xx">2xx</option>
-        <option value="4xx">4xx</option>
-        <option value="5xx">5xx</option>
-      </select>
-      类型: <select v-model="filters.stream" @change="onFilter">
-        <option value="">全部</option>
-        <option value="1">流式</option>
-        <option value="0">非流式</option>
-      </select>
-      来源: <input v-model="filters.app_source" @input="onFilter" size="12" />
-      <button @click="fetchData">搜索</button>
-    </p>
-
-    <div v-if="loading">加载中...</div>
+    <div v-if="loading">Loading...</div>
     <div v-else-if="error">{{ error }}</div>
-    <table v-else-if="requests.length" border="1" cellpadding="6" cellspacing="0">
+    <table v-else-if="data.length" border="1" cellpadding="6" cellspacing="0">
       <thead>
-        <tr>
-          <th>ID</th><th>时间</th><th>模型</th><th>类型</th><th>状态</th>
-          <th>输入Token</th><th>输出Token</th><th>延迟</th><th>首字节</th><th>费用</th><th>来源</th>
-        </tr>
+        <tr><th>ID</th><th>Time</th><th>Model</th><th>Type</th><th>Status</th><th>Input</th><th>Output</th><th>Latency</th><th>TTFB</th><th>Cost</th><th>Source</th></tr>
       </thead>
       <tbody>
-        <tr v-for="r in requests" :key="r.id">
+        <tr v-for="r in data" :key="r.id">
           <td>{{ r.id }}</td>
           <td>{{ new Date(r.timestamp).toLocaleString('zh-CN') }}</td>
           <td>{{ r.model }}</td>
-          <td>{{ r.stream ? '流式' : '非流式' }}</td>
+          <td>{{ r.stream ? 'Stream' : 'Batch' }}</td>
           <td>{{ r.status_code || 'ERR' }}</td>
           <td>{{ r.input_tokens.toLocaleString() }}</td>
           <td>{{ r.output_tokens.toLocaleString() }}</td>
@@ -49,15 +31,14 @@
         </tr>
       </tbody>
     </table>
-    <p v-else>暂无请求记录 — 通过代理发一些 API 请求吧</p>
+    <p v-else>No requests yet. Send API calls through the proxy.</p>
 
     <p v-if="total > 50">
-      第 {{ page }} / {{ Math.ceil(total / 50) }} 页
-      <button :disabled="page <= 1" @click="page--; fetchData()">上一页</button>
-      <button :disabled="page * 50 >= total" @click="page++; fetchData()">下一页</button>
+      Page {{ page }} / {{ Math.ceil(total / 50) }}
+      <button :disabled="page <= 1" @click="page--; fetch()">Prev</button>
+      <button :disabled="page * 50 >= total" @click="page++; fetch()">Next</button>
     </p>
-
-    <p><button @click="fetchData">刷新</button></p>
+    <p><button @click="fetch">Refresh</button></p>
   </div>
 </template>
 
@@ -68,26 +49,17 @@ import { useWebSocket } from '../composables/useWebSocket';
 import type { RequestRecord } from '../types';
 
 const { loading, error, fetchRequests } = useApi();
-const { connected: wsConnected, lastRequest } = useWebSocket();
+const { lastRequest } = useWebSocket();
 
-const requests = ref<RequestRecord[]>([]);
+const data = ref<RequestRecord[]>([]);
 const total = ref(0);
 const page = ref(1);
-const filters = reactive({ model: '', status: '', stream: '', app_source: '' });
+const f = reactive({ model: '', status: '', stream: '', app_source: '' });
 
-async function fetchData() {
-  try {
-    const r = await fetchRequests({ page: page.value, limit: 50, ...filters });
-    requests.value = r.data;
-    total.value = r.total;
-  } catch {}
+async function fetch() {
+  try { const r = await fetchRequests({ page: page.value, limit: 50, ...f }); data.value = r.data; total.value = r.total; } catch {}
 }
-
-function onFilter() { page.value = 1; fetchData(); }
-
-watch(lastRequest, (req) => {
-  if (req && page.value === 1) { requests.value.unshift(req); total.value++; }
-});
-
-onMounted(fetchData);
+function go() { page.value = 1; fetch(); }
+watch(lastRequest, (r) => { if (r && page.value === 1) { data.value.unshift(r); total.value++; } });
+onMounted(fetch);
 </script>
