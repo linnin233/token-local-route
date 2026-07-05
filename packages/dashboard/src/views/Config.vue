@@ -1,62 +1,62 @@
 <template>
   <div>
-    <h1>Config</h1>
-    <div v-if="loading">Loading...</div>
-    <div v-else-if="!cfg">No config</div>
+    <h1>配置</h1>
+    <div v-if="loading">加载中...</div>
+    <div v-else-if="!cfg">无配置</div>
     <div v-else>
-      <h2>Providers</h2>
+      <h2>提供商</h2>
       <table border="1" cellpadding="6" cellspacing="0">
-        <thead><tr><th>Name</th><th>Base URL</th><th>Type</th><th>API Key</th><th>Actions</th></tr></thead>
+        <thead><tr><th>名称</th><th>Base URL</th><th>类型</th><th>API Key</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="(p,name) in cfg.providers" :key="name">
             <td><b>{{ name }}</b></td>
             <td>{{ p.baseUrl }}</td>
             <td>{{ p.apiType }}</td>
             <td>{{ p.apiKey }}</td>
-            <td><button @click="delProvider(name)">Delete</button></td>
+            <td><button @click="delProvider(name)">删除</button></td>
           </tr>
         </tbody>
       </table>
 
-      <h3>Add Provider</h3>
+      <h3>添加提供商</h3>
       <p>
-        Name: <input v-model="pf.name" size="12" />
+        名称: <input v-model="pf.name" size="12" />
         Base URL: <input v-model="pf.baseUrl" size="30" />
         API Key: <input v-model="pf.apiKey" size="40" />
-        Type: <select v-model="pf.apiType"><option>openai</option><option>anthropic</option></select>
-        <button @click="addProvider">Add</button>
+        类型: <select v-model="pf.apiType"><option>openai</option><option>anthropic</option></select>
+        <button @click="addProvider">添加</button>
       </p>
 
-      <h2>Routes</h2>
+      <h2>路由规则</h2>
       <table border="1" cellpadding="6" cellspacing="0">
-        <thead><tr><th>Model</th><th>Provider</th><th>Actions</th></tr></thead>
+        <thead><tr><th>模型</th><th>提供商</th><th>操作</th></tr></thead>
         <tbody>
           <tr v-for="r in cfg.routes" :key="r.model+r.provider">
             <td>{{ r.model }}</td>
             <td>{{ r.provider }}</td>
-            <td><button @click="delRoute(r)">Delete</button></td>
+            <td><button @click="delRoute(r)">删除</button></td>
           </tr>
         </tbody>
       </table>
 
-      <h3>Add Route</h3>
+      <h3>添加路由</h3>
       <p>
-        Model: <input v-model="rf.model" size="20" placeholder="deepseek-*" />
-        Provider: <select v-model="rf.provider">
+        模型: <input v-model="rf.model" size="20" placeholder="deepseek-*" />
+        提供商: <select v-model="rf.provider">
           <option v-for="(_,n) in cfg.providers" :key="n" :value="n">{{ n }}</option>
         </select>
-        <button @click="addRoute">Add</button>
+        <button @click="addRoute">添加</button>
       </p>
 
-      <h2>Default Provider</h2>
+      <h2>默认提供商</h2>
       <p>
         <select v-model="cfg.defaultProvider" @change="setDefault(cfg.defaultProvider)">
           <option v-for="(_,n) in cfg.providers" :key="n" :value="n">{{ n }}</option>
         </select>
-        <button @click="setDefault(cfg.defaultProvider)">Save</button>
+        <button @click="setDefault(cfg.defaultProvider)">保存</button>
       </p>
 
-      <p><button @click="refresh">Refresh</button> <span v-if="msg">{{ msg }}</span></p>
+      <p><button @click="refresh">刷新</button> <span v-if="msg">{{ msg }}</span></p>
     </div>
   </div>
 </template>
@@ -84,29 +84,29 @@ async function refresh() {
 async function addProvider() {
   if(!pf.name||!pf.baseUrl) return;
   await fetch('/api/config/provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...pf})});
-  pf.name=pf.baseUrl=pf.apiKey=''; pf.apiType='openai'; msg.value='Provider added'; refresh();
+  pf.name=pf.baseUrl=pf.apiKey=''; pf.apiType='openai'; msg.value='已添加'; refresh();
 }
 
 async function delProvider(name:string) {
-  if(!confirm('Delete provider '+name+'? This also removes its routes.')) return;
+  if(!confirm('确定删除提供商 '+name+'? 关联的路由也会被删除。')) return;
   await fetch('/api/config/provider/'+name,{method:'DELETE'});
-  msg.value='Provider deleted'; refresh();
+  msg.value='已删除'; refresh();
 }
 
 async function addRoute() {
   if(!rf.model||!rf.provider) return;
   await fetch('/api/config/route',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...rf})});
-  rf.model=rf.provider=''; msg.value='Route added'; refresh();
+  rf.model=rf.provider=''; msg.value='路由已添加'; refresh();
 }
 
 async function delRoute(r:R) {
   await fetch('/api/config/route',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify(r)});
-  msg.value='Route deleted'; refresh();
+  msg.value='路由已删除'; refresh();
 }
 
 async function setDefault(p:string) {
   await fetch('/api/config/default-provider',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:p})});
-  msg.value='Default saved'; refresh();
+  msg.value='已保存'; refresh();
 }
 
 onMounted(refresh);
