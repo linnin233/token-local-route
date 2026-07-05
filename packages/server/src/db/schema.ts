@@ -85,8 +85,9 @@ export function seedPricing(db: Database.Database): void {
   db.exec(`
     INSERT OR IGNORE INTO pricing (model, input_price, output_price, cache_read_price, cache_write_price)
     VALUES
-      ('deepseek-chat',      0.00000027, 0.00000110, 0, 0),
-      ('deepseek-v4-flash',  0.00000027, 0.00000110, 0, 0),
-      ('deepseek-reasoner',  0.00000055, 0.00000219, 0, 0);
+      ('deepseek-v4-flash',  0.00000014,  0.00000028,  0.0000000028,  0),
+      ('deepseek-v4-pro',    0.000000435, 0.00000087,  0.000000003625, 0),
+      ('deepseek-chat',      0.00000014,  0.00000028,  0.0000000028,  0),
+      ('deepseek-reasoner',  0.00000055,  0.00000219,  0,              0);
   `);
 }

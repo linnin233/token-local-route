@@ -117,15 +117,12 @@ export function getPricing(db: Database.Database, model: string): PricingInfo | 
 
 /**
  * 将模型名规范化为定价表中的基础模型名
- *   deepseek-v4-flash → deepseek-chat
- *   deepseek-chat    → deepseek-chat (保持)
- *   deepseek-reasoner → deepseek-reasoner (保持)
+ *   deepseek-chat (官方别名) → deepseek-v4-flash
+ *   deepseek-v4-flash        → deepseek-v4-flash (精确匹配)
+ *   deepseek-v4-pro          → deepseek-v4-pro   (精确匹配)
+ *   deepseek-reasoner        → deepseek-reasoner
  */
 function normalizeModel(model: string): string {
-  const lower = model.toLowerCase();
-  // deepseek v* 系列（v4-flash, v3 等）→ deepseek-chat 定价
-  if (lower.startsWith('deepseek') && (lower.includes('v4') || lower.includes('v3') || lower.includes('v2'))) {
-    return 'deepseek-chat';
-  }
+  if (model === 'deepseek-chat') return 'deepseek-v4-flash';
   return model;
 }
