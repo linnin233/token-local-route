@@ -1,14 +1,10 @@
 <template>
   <div>
-    <h1>⚡ 测速</h1>
+    <h1>测速</h1>
 
     <div v-if="loading && speedData.length === 0">加载中...</div>
     <div v-else>
-      <h2>
-        当前延迟:
-        <b v-if="currentLatency !== null">{{ currentLatency }}ms</b>
-        <b v-else>--</b>
-      </h2>
+      <h2>当前延迟: <b>{{ currentLatency !== null ? currentLatency + 'ms' : '--' }}</b></h2>
 
       <h3>最近测试记录</h3>
       <table v-if="speedData.length" border="1" cellpadding="6" cellspacing="0">
@@ -19,7 +15,7 @@
             <td>{{ s.target_url }}</td>
             <td>{{ s.latency_ms }}ms</td>
             <td>{{ s.ttfb_ms }}ms</td>
-            <td>{{ s.success ? '✅ 正常' : '❌ 失败' }}</td>
+            <td>{{ s.success ? 'OK' : 'FAIL' }}</td>
           </tr>
         </tbody>
       </table>
@@ -39,18 +35,12 @@ const { loading, fetchSpeed } = useApi();
 const speedData = ref<SpeedRecord[]>([]);
 let timer: ReturnType<typeof setInterval> | null = null;
 
-const currentLatency = computed(() => {
-  if (speedData.value.length === 0) return null;
-  return speedData.value[0].latency_ms;
-});
+const currentLatency = computed(() => speedData.value.length > 0 ? speedData.value[0].latency_ms : null);
 
 async function refresh() {
   try { speedData.value = await fetchSpeed(50); } catch {}
 }
 
-onMounted(() => {
-  refresh();
-  timer = setInterval(refresh, 5000);
-});
+onMounted(() => { refresh(); timer = setInterval(refresh, 5000); });
 onUnmounted(() => { if (timer) clearInterval(timer); });
 </script>
