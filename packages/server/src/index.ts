@@ -54,14 +54,23 @@ function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): vo
   if (url === '/health') { res.writeHead(200).end('ok'); return; }
 
   if (url.startsWith('/api/')) {
-    const h = new Headers();
-    for (const [k, v] of Object.entries(req.headers)) if (v) h.set(k, Array.isArray(v) ? v.join(', ') : v);
-    const r = new Request(`http://${req.headers.host || '127.0.0.1'}${url}`, { method: req.method || 'GET', headers: h });
-    Promise.resolve(apiRouter.fetch(r)).then((resp: Response) => {
-      resp.headers.forEach((v: string, k: string) => { if (k.toLowerCase() !== 'access-control-allow-origin') res.setHeader(k, v); });
-      res.statusCode = resp.status;
-      resp.text().then((b: string) => res.end(b));
-    }).catch((err: Error) => { if (!res.headersSent) { res.writeHead(500); res.end(err.message); } });
+    // 收集 body 再构造 Request（否则 Hono 的 c.req.json() 拿不到数据）
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf-8') || undefined;
+      const h = new Headers();
+      for (const [k, v] of Object.entries(req.headers)) if (v) h.set(k, Array.isArray(v) ? v.join(', ') : v);
+      if (body) h.set('content-length', String(Buffer.byteLength(body)));
+      const r = new Request(`http://${req.headers.host || '127.0.0.1'}${url}`, {
+        method: req.method || 'GET', headers: h, body: body || undefined,
+      });
+      Promise.resolve(apiRouter.fetch(r)).then((resp: Response) => {
+        resp.headers.forEach((v: string, k: string) => { if (k.toLowerCase() !== 'access-control-allow-origin') res.setHeader(k, v); });
+        res.statusCode = resp.status;
+        resp.text().then((b: string) => res.end(b));
+      }).catch((err: Error) => { if (!res.headersSent) { res.writeHead(500); res.end(err.message); } });
+    });
     return;
   }
 

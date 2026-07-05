@@ -17,6 +17,8 @@ import crypto from 'node:crypto';
 
 export interface Provider {
   baseUrl: string;
+  /** Anthropic 格式端点 URL（可选，不填则用 baseUrl） */
+  anthropicUrl?: string;
   apiKey: string;
   apiType: 'openai' | 'anthropic';
 }
