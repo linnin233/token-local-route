@@ -1,56 +1,35 @@
 /**
- * HTTP 请求转发器
+ * HTTP 请求转发器 — 基于模型名路由到对应的 API Provider
  *
- * 将收到的代理请求转发到 DeepSeek API，同时记录性能指标。
- * 使用 Node.js 内置 http/https 模块实现 raw socket 级控制，
- * 确保 SSE streaming 的零延迟 relay 和精确的 TTFB 测量。
- *
- * target base URL 从全局配置 (~/.token-local-route/config.json) 中读取，
- * 无需调用方传入。
+ * 流程：解析请求体 model → 查路由表找 provider → 转发到 provider 的 baseUrl
  */
 
 import http from 'node:http';
 import https from 'node:https';
-import { getConfig } from '../config.js';
+import { getConfig, resolveProvider, resolveProviderName } from '../config.js';
+import type { Provider } from '../config.js';
 import { parseNonStreamResponse, extractTokensFromSSEStream } from './parser.js';
 import type { ParsedResponse } from './parser.js';
 
 // ============================================================================
-// 类型定义
+// 类型
 // ============================================================================
 
-/** 转发结果 */
 export interface ForwardResult {
   statusCode: number;
   headers: Record<string, string>;
-  body: string;                    // 非流式：完整响应 body
-  streamChunks: string[];          // 流式：收集的 SSE chunks
-  timing: {
-    startTime: number;             // 请求开始时间戳 (ms)
-    ttfbMs: number;                // Time To First Byte (ms)
-    totalMs: number;               // 总耗时 (ms)
-  };
-  tokens: ParsedResponse | null;   // 提取的 token 用量
-  errorType: string | null;        // 'timeout' | 'network' | 'rate_limit' | null
+  body: string;
+  streamChunks: string[];
+  timing: { startTime: number; ttfbMs: number; totalMs: number };
+  tokens: ParsedResponse | null;
+  errorType: string | null;
+  providerName: string;
 }
 
 // ============================================================================
-// 请求转发
+// 转发
 // ============================================================================
 
-/**
- * 转发 HTTP 请求到目标 API。
- *
- * 路径替换规则：
- *   本地路径 /v1/chat/completions → https://api.deepseek.com/v1/chat/completions
- *   同样支持 /v1/models, /v1/embeddings 等 OpenAI 兼容路径。
- *
- * @param method          HTTP 方法 (GET/POST/...)
- * @param path            请求路径 (如 /v1/chat/completions)
- * @param headers         原始请求头（Authorization、Content-Type 等原样转发）
- * @param body            请求体 (JSON 字符串 / null)
- * @param onStreamChunk   流式回调 — 每收到一个 SSE chunk 就调用，用于 relay 给客户端
- */
 export async function forwardRequest(
   method: string,
   path: string,
@@ -64,184 +43,97 @@ export async function forwardRequest(
   let statusCode = 0;
   let responseBody = '';
   const streamChunks: string[] = [];
-  let tokens: ParsedResponse | null = null;
   let errorType: string | null = null;
 
-  // 从全局配置中读取 target base URL
+  // ---- 路由：模型名 → provider ----
   const config = getConfig();
-  const targetUrl = config.target.baseUrl;
+  const model = extractModel(body);
+  const provider = resolveProvider(config, model);
+  const providerName = resolveProviderName(config, model);
+  const isStream = body ? isStreamBody(body) : false;
+  const target = new URL(provider.baseUrl);
 
-  // 解析 target URL 并拼接完整路径
-  const target = new URL(targetUrl);
-  const isHttps = target.protocol === 'https:';
-  const transport = isHttps ? https : http;
-  const port = target.port || (isHttps ? 443 : 80);
-
-  // 构建完整请求路径：target origin + 原始 path
-  const fullPath = path;
-
-  // 构建转发请求头 — 保留原始头但替换 host 为 target
-  const forwardHeaders: Record<string, string> = {
-    ...headers,
-    host: target.hostname,
-  };
-
-  // 添加代理标识，方便上游识别请求来源
+  // ---- 构建转发请求 ----
+  const forwardHeaders: Record<string, string> = { ...headers, host: target.hostname };
   forwardHeaders['x-proxy'] = 'token-local-route';
 
-  // 判断请求体是否包含 "stream": true
-  const isStream = body ? isStreamRequest(body) : false;
-
-  // 对流式请求额外设置 Accept 头（不影响已有值）
-  if (isStream && !forwardHeaders['accept']) {
-    forwardHeaders['accept'] = 'text/event-stream';
+  // 如果客户端没传 Authorization，用 provider 的 key
+  if (!forwardHeaders['authorization'] && provider.apiKey) {
+    forwardHeaders['authorization'] = `Bearer ${provider.apiKey}`;
   }
 
-  // 执行转发
+  const transport = target.protocol === 'https:' ? https : http;
+  const port = target.port || (target.protocol === 'https:' ? 443 : 80);
+
   return new Promise((resolve) => {
     const req = transport.request(
       {
         hostname: target.hostname,
         port,
-        path: fullPath,
+        path,
         method,
         headers: forwardHeaders,
-        timeout: 30000, // 30 秒超时
+        timeout: 30000,
       },
       (res) => {
         statusCode = res.statusCode || 0;
-
-        // 收集响应头（处理重复头为逗号分隔字符串）
         const respHeaders: Record<string, string> = {};
-        for (const [key, value] of Object.entries(res.headers)) {
-          if (value !== undefined) {
-            respHeaders[key] = Array.isArray(value) ? value.join(', ') : value;
-          }
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v !== undefined) respHeaders[k] = Array.isArray(v) ? v.join(', ') : v;
         }
 
-        // 处理响应数据
         res.on('data', (chunk: Buffer) => {
-          const chunkStr = chunk.toString('utf-8');
-
-          // 记录 TTFB (time to first byte) — 只在首个 data 事件触发时记录
-          if (firstByte) {
-            ttfbMs = Date.now() - startTime;
-            firstByte = false;
-          }
-
-          if (isStream && onStreamChunk) {
-            // 流式模式：立即 relay 每个 chunk 给客户端，同时收集用于后续解析
-            onStreamChunk(chunkStr);
-            streamChunks.push(chunkStr);
-          } else {
-            // 非流式模式：累积完整响应体，最后统一解析
-            responseBody += chunkStr;
-          }
+          const s = chunk.toString('utf-8');
+          if (firstByte) { ttfbMs = Date.now() - startTime; firstByte = false; }
+          if (isStream && onStreamChunk) { onStreamChunk(s); streamChunks.push(s); }
+          else { responseBody += s; }
         });
 
         res.on('end', () => {
           const totalMs = Date.now() - startTime;
+          let tokens: ParsedResponse | null = null;
+          if (isStream) tokens = extractTokensFromSSEStream(streamChunks.join(''));
+          else tokens = parseNonStreamResponse(responseBody);
 
-          // 解析 token 用量
-          if (isStream) {
-            // 流式：将所有 chunks 拼接后提取最后一个 usage 字段
-            const fullStream = streamChunks.join('');
-            tokens = extractTokensFromSSEStream(fullStream);
-          } else {
-            // 非流式：直接从完整 JSON response 中解析 usage
-            tokens = parseNonStreamResponse(responseBody);
-          }
+          if (statusCode === 429) errorType = 'rate_limit';
+          else if (statusCode >= 500) errorType = 'server_error';
 
-          // 根据状态码识别错误类型
-          if (statusCode === 429) {
-            errorType = 'rate_limit';
-          } else if (statusCode >= 500) {
-            errorType = 'server_error';
-          }
-
-          resolve({
-            statusCode,
-            headers: respHeaders,
-            body: responseBody,
-            streamChunks,
-            timing: { startTime, ttfbMs, totalMs },
-            tokens,
-            errorType,
-          });
+          resolve({ statusCode, headers: respHeaders, body: responseBody, streamChunks,
+            timing: { startTime, ttfbMs, totalMs }, tokens, errorType, providerName });
         });
 
-        // 响应流错误（如中途断开）
-        res.on('error', (err) => {
-          errorType = 'network';
-          const totalMs = Date.now() - startTime;
-          if (firstByte) ttfbMs = totalMs;
-          resolve({
-            statusCode: 0,
-            headers: {},
-            body: responseBody,
-            streamChunks,
-            timing: { startTime, ttfbMs, totalMs },
-            tokens: null,
-            errorType,
-          });
+        res.on('error', () => {
+          resolve(makeError(startTime, ttfbMs, errorType || 'network', providerName));
         });
       },
     );
 
-    // --- 请求级超时处理 ---
-    req.on('timeout', () => {
-      req.destroy();
-      errorType = 'timeout';
-      const totalMs = Date.now() - startTime;
-      resolve({
-        statusCode: 0,
-        headers: {},
-        body: '',
-        streamChunks,
-        timing: { startTime, ttfbMs, totalMs },
-        tokens: null,
-        errorType,
-      });
-    });
+    req.on('timeout', () => { req.destroy(); resolve(makeError(startTime, ttfbMs, 'timeout', providerName)); });
+    req.on('error', () => { resolve(makeError(startTime, ttfbMs, 'network', providerName)); });
 
-    // --- 请求级网络错误处理 ---
-    req.on('error', (err) => {
-      errorType = 'network';
-      const totalMs = Date.now() - startTime;
-      resolve({
-        statusCode: 0,
-        headers: {},
-        body: '',
-        streamChunks,
-        timing: { startTime, ttfbMs, totalMs },
-        tokens: null,
-        errorType,
-      });
-    });
-
-    // 写入请求体（POST 等方法的 JSON payload）
-    if (body) {
-      req.write(body);
-    }
+    if (body) req.write(body);
     req.end();
   });
 }
 
 // ============================================================================
-// 工具函数
+// 工具
 // ============================================================================
 
-/**
- * 检查请求体是否包含 "stream": true，判断是否为流式请求。
- *
- * @param body - 请求体 JSON 字符串
- * @returns true 如果 body 包含 stream: true
- */
-function isStreamRequest(body: string): boolean {
-  try {
-    const json = JSON.parse(body);
-    return json.stream === true;
-  } catch {
-    return false;
-  }
+function extractModel(body: string | null): string {
+  if (!body) return 'unknown';
+  try { return JSON.parse(body).model || 'unknown'; } catch { return 'unknown'; }
+}
+
+function isStreamBody(body: string | null): boolean {
+  if (!body) return false;
+  try { return JSON.parse(body).stream === true; } catch { return false; }
+}
+
+function makeError(start: number, ttfb: number, errType: string, provider: string): ForwardResult {
+  return {
+    statusCode: 0, headers: {}, body: '', streamChunks: [],
+    timing: { startTime: start, ttfbMs: ttfb, totalMs: Date.now() - start },
+    tokens: null, errorType: errType, providerName: provider,
+  };
 }

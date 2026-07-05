@@ -1,7 +1,7 @@
 /**
  * token-local-route — LLM API 本地代理中转站
  *
- * 核心功能：接收 Claude/OpenCode 的 API 请求 → 转发到 DeepSeek → 记录统计
+ * 接收 Claude/OpenCode 请求 → 按模型路由到对应 provider → 转发 → 记录统计
  */
 
 import http from 'node:http';
@@ -17,7 +17,10 @@ import type { RequestRecord } from './proxy/server.js';
 const config = getConfig();
 const db = getDb();
 
-console.log('[token-local-route] Proxy: %s:%d -> %s', config.proxy.host, config.proxy.port, config.target.baseUrl);
+console.log('[token-local-route] proxy %s:%d', config.proxy.host, config.proxy.port);
+for (const [name, p] of Object.entries(config.providers)) {
+  console.log('[token-local-route] provider %s -> %s (%s)', name, p.baseUrl, p.apiType);
+}
 
 let broadcastWs: ((data: unknown) => void) | null = null;
 
@@ -36,43 +39,27 @@ function onRequestComplete(record: RequestRecord): void {
   }
 }
 
-const proxyServer = createProxyServer(config, onRequestComplete);
+const proxyServer = createProxyServer(onRequestComplete);
 const apiRouter = createApiRouter(db);
 
 function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): void {
   const url = req.url || '/';
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-App-Source');
 
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
-
-  if (url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok' }));
-    return;
-  }
+  if (url === '/health') { res.writeHead(200).end('ok'); return; }
 
   if (url.startsWith('/api/')) {
-    const headers = new Headers();
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (v) headers.set(k, Array.isArray(v) ? v.join(', ') : v);
-    }
-    const honoReq = new Request(`http://${req.headers.host || '127.0.0.1'}${url}`, {
-      method: req.method || 'GET', headers,
-    });
-    Promise.resolve(apiRouter.fetch(honoReq)).then((honoRes: Response) => {
-      honoRes.headers.forEach((value: string, key: string) => {
-        if (key.toLowerCase() !== 'access-control-allow-origin') res.setHeader(key, value);
-      });
-      res.statusCode = honoRes.status;
-      honoRes.text().then((body: string) => res.end(body));
-    }).catch((err: Error) => {
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
-    });
+    const h = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) if (v) h.set(k, Array.isArray(v) ? v.join(', ') : v);
+    const r = new Request(`http://${req.headers.host || '127.0.0.1'}${url}`, { method: req.method || 'GET', headers: h });
+    Promise.resolve(apiRouter.fetch(r)).then((resp: Response) => {
+      resp.headers.forEach((v: string, k: string) => { if (k.toLowerCase() !== 'access-control-allow-origin') res.setHeader(k, v); });
+      res.statusCode = resp.status;
+      resp.text().then((b: string) => res.end(b));
+    }).catch((err: Error) => { if (!res.headersSent) { res.writeHead(500); res.end(err.message); } });
     return;
   }
 
@@ -81,7 +68,7 @@ function requestHandler(req: http.IncomingMessage, res: http.ServerResponse): vo
 
 const httpServer = http.createServer(requestHandler);
 httpServer.listen(config.proxy.port, config.proxy.host, () => {
-  console.log('[token-local-route] Listening on http://%s:%d', config.proxy.host, config.proxy.port);
+  console.log('[token-local-route] listening on http://%s:%d', config.proxy.host, config.proxy.port);
 });
 
 const wsServer = createWSServer(httpServer);
@@ -95,6 +82,5 @@ function shutdown(): void {
   httpServer.close(() => { closeDb(); process.exit(0); });
   setTimeout(() => process.exit(1), 5000);
 }
-
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
