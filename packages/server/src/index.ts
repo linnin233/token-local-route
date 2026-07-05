@@ -18,8 +18,10 @@ const config = getConfig();
 const db = getDb();
 
 console.log('[token-local-route] proxy %s:%d', config.proxy.host, config.proxy.port);
+console.log('[token-local-route] proxyKey: %s', config.proxyKey);
 for (const [name, p] of Object.entries(config.providers)) {
-  console.log('[token-local-route] provider %s -> %s (%s)', name, p.baseUrl, p.apiType);
+  console.log('[token-local-route] provider %s -> %s (%s) %s',
+    name, p.baseUrl, p.apiType, p.apiKey ? 'key=***' : 'key=NOT SET');
 }
 
 let broadcastWs: ((data: unknown) => void) | null = null;

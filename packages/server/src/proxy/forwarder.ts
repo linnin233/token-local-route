@@ -57,8 +57,9 @@ export async function forwardRequest(
   const forwardHeaders: Record<string, string> = { ...headers, host: target.hostname };
   forwardHeaders['x-proxy'] = 'token-local-route';
 
-  // 如果客户端没传 Authorization，用 provider 的 key
-  if (!forwardHeaders['authorization'] && provider.apiKey) {
+  // 始终用 provider 的 apiKey 转发（客户端传的是 proxyKey）
+  delete forwardHeaders['authorization'];
+  if (provider.apiKey) {
     forwardHeaders['authorization'] = `Bearer ${provider.apiKey}`;
   }
 

@@ -1,8 +1,9 @@
 /**
- * HTTP 代理服务器 — 接收请求，转发到对应 provider，回调记录统计
+ * HTTP 代理服务器 — 请求鉴权 + 按模型路由转发
  */
 
 import http from 'node:http';
+import { getConfig } from '../config.js';
 import { forwardRequest } from './forwarder.js';
 
 export interface RequestRecord {
@@ -27,12 +28,13 @@ export interface RequestRecord {
 export function createProxyServer(
   onRequestComplete: (record: RequestRecord) => void,
 ): http.Server {
+  const config = getConfig();
+
   return http.createServer((req, res) => {
     const startTime = Date.now();
     const method = req.method || 'GET';
     const url = req.url || '/';
 
-    // CORS preflight
     if (method === 'OPTIONS') {
       res.writeHead(200, {
         'Access-Control-Allow-Origin': '*',
@@ -43,10 +45,19 @@ export function createProxyServer(
       return;
     }
 
-    // 只代理 /v1/* 路径
+    // 路径校验
     if (!url.startsWith('/v1/')) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    // ---- 鉴权：检查 proxyKey ----
+    const auth = req.headers['authorization'] || '';
+    if (!auth.startsWith('Bearer ') || auth.slice(7) !== config.proxyKey) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized — check your proxy API key' }));
+      console.log(`[proxy] 401 ${method} ${url} — invalid proxy key`);
       return;
     }
 
@@ -70,9 +81,7 @@ export function createProxyServer(
         }
 
         const result = await forwardRequest(
-          method, url,
-          flattenHeaders(req.headers),
-          body,
+          method, url, flattenHeaders(req.headers), body,
           isStream ? (chunk: string) => { if (!res.writableEnded) res.write(chunk); } : undefined,
         );
 
@@ -123,17 +132,14 @@ function flattenHeaders(h: http.IncomingHttpHeaders): Record<string, string> {
   for (const [k, v] of Object.entries(h)) if (v) r[k] = Array.isArray(v) ? v.join(', ') : v;
   return r;
 }
-
 function extractModel(body: string | null): string {
   if (!body) return 'unknown';
   try { return JSON.parse(body).model || 'unknown'; } catch { return 'unknown'; }
 }
-
 function isStreamBody(body: string | null): boolean {
   if (!body) return false;
   try { return JSON.parse(body).stream === true; } catch { return false; }
 }
-
 function detectAppSource(headers: http.IncomingHttpHeaders): string {
   const src = headers['x-app-source'] as string | undefined;
   if (src) return src;

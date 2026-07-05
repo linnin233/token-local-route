@@ -1,62 +1,55 @@
 /**
  * 配置管理 — ~/.token-local-route/config.json
  *
- * 三层结构：
- *   providers  — 定义每个 API 提供商 (baseUrl, apiKey, apiType)
- *   routes     — 模型名 → provider 的映射规则 (支持通配符)
- *   defaultProvider — 未匹配模型使用的默认 provider
+ * proxyKey: AI 工具连接代理时使用的本地密钥（自动生成）
+ * providers: 上游 API 提供商配置（apiKey 填真实的 DeepSeek/OpenAI 密钥）
+ * routes: 模型名 → provider 映射
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 
 // ============================================================================
-// 类型定义
+// 类型
 // ============================================================================
 
-/** 一个 API 提供商 */
 export interface Provider {
-  /** API base URL，如 https://api.deepseek.com */
   baseUrl: string;
-  /** API Key */
   apiKey: string;
-  /** API 格式: openai | anthropic */
   apiType: 'openai' | 'anthropic';
 }
 
-/** 一条路由规则：匹配的模型 → 使用的 provider */
 export interface Route {
-  /** 模型名，支持 * 通配符。如 "deepseek-*" 匹配所有 deepseek 模型 */
   model: string;
-  /** 目标 provider 名称 */
   provider: string;
 }
 
-/** 完整配置 */
 export interface Config {
-  proxy: {
-    port: number;
-    host: string;
-  };
-  /** provider 名 → provider 配置 */
+  proxy: { port: number; host: string };
+  /** AI 工具连代理时用的本地密钥 */
+  proxyKey: string;
   providers: Record<string, Provider>;
-  /** 路由规则列表，从上到下匹配，命中第一条生效 */
   routes: Route[];
-  /** 没有匹配路由时的默认 provider 名 */
   defaultProvider: string;
 }
 
 // ============================================================================
-// 默认配置 — 首次运行自动生成
+// 默认配置
 // ============================================================================
+
+function genKey(): string {
+  return 'tlr-' + crypto.randomBytes(24).toString('hex');
+}
 
 const DEFAULT_CONFIG: Config = {
   proxy: { port: 12370, host: '127.0.0.1' },
+  proxyKey: genKey(),
   providers: {
     deepseek: {
       baseUrl: 'https://api.deepseek.com',
-      apiKey: process.env.DEEPSEEK_API_KEY || '',
+      apiKey: '',
       apiType: 'openai',
     },
   },
@@ -80,40 +73,38 @@ function getConfigFile(): string {
 
 let cached: Config | null = null;
 
-/** 读取配置（带缓存） */
 export function getConfig(): Config {
   if (cached) return cached;
 
-  const defaults = { ...DEFAULT_CONFIG };
   const filePath = getConfigFile();
+  let loaded: Partial<Config> = {};
 
   try {
     if (fs.existsSync(filePath)) {
-      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-      // 深度合并
-      if (raw.proxy) defaults.proxy = { ...defaults.proxy, ...raw.proxy };
-      if (raw.providers) defaults.providers = { ...raw.providers };
-      if (raw.routes) defaults.routes = raw.routes;
-      if (raw.defaultProvider) defaults.defaultProvider = raw.defaultProvider;
-    } else {
-      // 首次运行 — 写入默认配置
-      saveConfig(defaults);
+      loaded = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
     }
   } catch (err) {
-    console.warn('[config] Failed to read config, using defaults:', (err as Error).message);
+    console.warn('[config] Failed to read config:', (err as Error).message);
   }
 
-  // 环境变量覆盖 DeepSeek 的 apiKey（如果配了的话）
-  const envKey = process.env.DEEPSEEK_API_KEY;
-  if (envKey && defaults.providers.deepseek) {
-    defaults.providers.deepseek.apiKey = envKey;
+  // 深度合并：已保存的配置优先，缺失的用默认值（包括新生成的 proxyKey）
+  const merged: Config = {
+    proxy: { ...DEFAULT_CONFIG.proxy, ...(loaded.proxy || {}) },
+    proxyKey: loaded.proxyKey || DEFAULT_CONFIG.proxyKey,
+    providers: loaded.providers || DEFAULT_CONFIG.providers,
+    routes: loaded.routes || DEFAULT_CONFIG.routes,
+    defaultProvider: loaded.defaultProvider || DEFAULT_CONFIG.defaultProvider,
+  };
+
+  // 首次运行自动保存
+  if (!fs.existsSync(filePath)) {
+    saveConfig(merged);
   }
 
-  cached = defaults;
+  cached = merged;
   return cached;
 }
 
-/** 写入配置并刷新缓存 */
 export function saveConfig(config: Config): void {
   const dir = path.dirname(getConfigFile());
   fs.mkdirSync(dir, { recursive: true });
@@ -125,25 +116,13 @@ export function saveConfig(config: Config): void {
 // 路由匹配
 // ============================================================================
 
-/**
- * 根据模型名找到对应的 Provider。
- *
- * 匹配规则：
- *   1. 遍历 routes 列表，从上到下匹配
- *   2. 支持 * 通配符 (如 "deepseek-*")
- *   3. 精确匹配优先于通配符匹配
- *   4. 都没匹配到则返回 defaultProvider
- */
 export function resolveProvider(config: Config, model: string): Provider {
-  // 1. 精确匹配
   for (const route of config.routes) {
     if (!route.model.includes('*') && route.model === model) {
       const p = config.providers[route.provider];
       if (p) return p;
     }
   }
-
-  // 2. 通配符匹配
   for (const route of config.routes) {
     if (route.model.includes('*')) {
       const regex = new RegExp('^' + route.model.replace(/\*/g, '.*') + '$');
@@ -153,29 +132,20 @@ export function resolveProvider(config: Config, model: string): Provider {
       }
     }
   }
-
-  // 3. 默认 fallback
   const fallback = config.providers[config.defaultProvider];
   if (fallback) return fallback;
-
-  // 4. 最后的兜底 — 返回第一个 provider
   const first = Object.values(config.providers)[0];
   if (first) return first;
-
   throw new Error('No provider configured');
 }
 
-/**
- * 根据模型名找到对应的 provider 名称
- */
 export function resolveProviderName(config: Config, model: string): string {
   for (const route of config.routes) {
     if (!route.model.includes('*') && route.model === model) return route.provider;
   }
   for (const route of config.routes) {
     if (route.model.includes('*')) {
-      const regex = new RegExp('^' + route.model.replace(/\*/g, '.*') + '$');
-      if (regex.test(model)) return route.provider;
+      if (new RegExp('^' + route.model.replace(/\*/g, '.*') + '$').test(model)) return route.provider;
     }
   }
   return config.defaultProvider;
