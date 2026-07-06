@@ -51,6 +51,7 @@ const DEFAULT_CONFIG: Config = {
   providers: {
     deepseek: {
       baseUrl: 'https://api.deepseek.com',
+      anthropicUrl: 'https://api.deepseek.com/anthropic',
       apiKey: '',
       apiType: 'openai',
     },

@@ -176,3 +176,99 @@ export function extractTokensFromSSEStream(body: string): ParsedResponse | null 
 
   return null;
 }
+
+// ============================================================================
+// Anthropic Messages API 解析
+// ============================================================================
+
+/**
+ * 解析 Anthropic 格式的非流式响应
+ *
+ * DeepSeek Anthropic 兼容端点返回格式:
+ * {
+ *   "id": "...", "type": "message", "model": "deepseek-v4-flash",
+ *   "content": [{ "type": "text", "text": "..." }],
+ *   "usage": { "input_tokens": 10, "output_tokens": 20,
+ *              "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0 }
+ * }
+ */
+export function parseAnthropicResponse(body: string): ParsedResponse {
+  try {
+    const json = JSON.parse(body);
+
+    if (json.error) {
+      console.warn('[parser] Anthropic API error:', json.error.message || json.error);
+      return { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: 'unknown' };
+    }
+
+    const usage = json.usage || {};
+    return {
+      input_tokens: usage.input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+      cache_read_tokens: usage.cache_read_input_tokens ?? 0,
+      cache_write_tokens: usage.cache_creation_input_tokens ?? 0,
+      model: json.model || 'unknown',
+    };
+  } catch {
+    return { input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0, model: 'unknown' };
+  }
+}
+
+/**
+ * 从 Anthropic SSE 流式响应中提取 token 用量
+ *
+ * Anthropic 流式格式:
+ *   event: message_start
+ *   data: {"type":"message_start","message":{"model":"...","usage":{"input_tokens":X}}}
+ *
+ *   event: content_block_delta
+ *   data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"..."}}
+ *
+ *   event: message_delta
+ *   data: {"type":"message_delta","usage":{"output_tokens":Y}}
+ *
+ *   event: message_stop
+ *   data: {"type":"message_stop"}
+ *
+ * 用量分布在 message_start (input_tokens) 和 message_delta (output_tokens)
+ */
+export function extractAnthropicTokensFromStream(body: string): ParsedResponse | null {
+  const events = body.split(/\n(?=event:)/); // 按 event: 分割
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheRead = 0;
+  let cacheWrite = 0;
+  let model = 'unknown';
+
+  for (const event of events) {
+    const lines = event.split('\n');
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const json = JSON.parse(line.slice(6));
+
+        // message_start 包含 input_tokens
+        if (json.type === 'message_start' && json.message) {
+          const u = json.message.usage || {};
+          inputTokens = u.input_tokens ?? 0;
+          cacheRead = u.cache_read_input_tokens ?? 0;
+          cacheWrite = u.cache_creation_input_tokens ?? 0;
+          model = json.message.model || model;
+        }
+
+        // message_delta 包含 output_tokens
+        if (json.type === 'message_delta') {
+          const u = json.usage || {};
+          outputTokens = u.output_tokens ?? 0;
+          // message_delta 也可能带完整的 usage
+          if (u.input_tokens) inputTokens = u.input_tokens;
+        }
+      } catch { /* skip non-JSON lines */ }
+    }
+  }
+
+  if (inputTokens === 0 && outputTokens === 0) return null;
+
+  return { input_tokens: inputTokens, output_tokens: outputTokens,
+    cache_read_tokens: cacheRead, cache_write_tokens: cacheWrite, model };
+}

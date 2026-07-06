@@ -1,19 +1,12 @@
 /**
- * HTTP 请求转发器 — 基于模型名路由到对应的 API Provider
- *
- * 流程：解析请求体 model → 查路由表找 provider → 转发到 provider 的 baseUrl
+ * HTTP 请求转发器 — 模型路由 + OpenAI/Anthropic 双格式支持
  */
 
 import http from 'node:http';
 import https from 'node:https';
 import { getConfig, resolveProvider, resolveProviderName } from '../config.js';
-import type { Provider } from '../config.js';
-import { parseNonStreamResponse, extractTokensFromSSEStream } from './parser.js';
+import { parseNonStreamResponse, extractTokensFromSSEStream, parseAnthropicResponse, extractAnthropicTokensFromStream } from './parser.js';
 import type { ParsedResponse } from './parser.js';
-
-// ============================================================================
-// 类型
-// ============================================================================
 
 export interface ForwardResult {
   statusCode: number;
@@ -25,10 +18,6 @@ export interface ForwardResult {
   errorType: string | null;
   providerName: string;
 }
-
-// ============================================================================
-// 转发
-// ============================================================================
 
 export async function forwardRequest(
   method: string,
@@ -45,19 +34,27 @@ export async function forwardRequest(
   const streamChunks: string[] = [];
   let errorType: string | null = null;
 
-  // ---- 路由：模型名 → provider ----
   const config = getConfig();
   const model = extractModel(body);
   const provider = resolveProvider(config, model);
   const providerName = resolveProviderName(config, model);
   const isStream = body ? isStreamBody(body) : false;
-  const target = new URL(provider.baseUrl);
+
+  // ---- 格式检测：Anthropic vs OpenAI ----
+  const isAnthropic = path.startsWith('/v1/messages');
+
+  // Anthropic 格式用 anthropicUrl，否则用 baseUrl
+  let baseUrl = provider.baseUrl;
+  if (isAnthropic && provider.anthropicUrl) {
+    baseUrl = provider.anthropicUrl;
+  }
+  const target = new URL(baseUrl);
 
   // ---- 构建转发请求 ----
   const forwardHeaders: Record<string, string> = { ...headers, host: target.hostname };
   forwardHeaders['x-proxy'] = 'token-local-route';
 
-  // 始终用 provider 的 apiKey 转发（客户端传的是 proxyKey）
+  // 始终用 provider 的 apiKey
   delete forwardHeaders['authorization'];
   if (provider.apiKey) {
     forwardHeaders['authorization'] = `Bearer ${provider.apiKey}`;
@@ -65,17 +62,12 @@ export async function forwardRequest(
 
   const transport = target.protocol === 'https:' ? https : http;
   const port = target.port || (target.protocol === 'https:' ? 443 : 80);
+  // 拼接 URL 的 pathname 前缀（如 /anthropic）和请求 path
+  const fullPath = (target.pathname !== '/' ? target.pathname : '') + path;
 
   return new Promise((resolve) => {
     const req = transport.request(
-      {
-        hostname: target.hostname,
-        port,
-        path,
-        method,
-        headers: forwardHeaders,
-        timeout: 30000,
-      },
+      { hostname: target.hostname, port, path: fullPath, method, headers: forwardHeaders, timeout: 30000 },
       (res) => {
         statusCode = res.statusCode || 0;
         const respHeaders: Record<string, string> = {};
@@ -93,8 +85,15 @@ export async function forwardRequest(
         res.on('end', () => {
           const totalMs = Date.now() - startTime;
           let tokens: ParsedResponse | null = null;
-          if (isStream) tokens = extractTokensFromSSEStream(streamChunks.join(''));
-          else tokens = parseNonStreamResponse(responseBody);
+          if (isStream) {
+            tokens = isAnthropic
+              ? extractAnthropicTokensFromStream(streamChunks.join(''))
+              : extractTokensFromSSEStream(streamChunks.join(''));
+          } else {
+            tokens = isAnthropic
+              ? parseAnthropicResponse(responseBody)
+              : parseNonStreamResponse(responseBody);
+          }
 
           if (statusCode === 429) errorType = 'rate_limit';
           else if (statusCode >= 500) errorType = 'server_error';
@@ -103,9 +102,7 @@ export async function forwardRequest(
             timing: { startTime, ttfbMs, totalMs }, tokens, errorType, providerName });
         });
 
-        res.on('error', () => {
-          resolve(makeError(startTime, ttfbMs, errorType || 'network', providerName));
-        });
+        res.on('error', () => resolve(makeError(startTime, ttfbMs, 'network', providerName)));
       },
     );
 
@@ -117,10 +114,6 @@ export async function forwardRequest(
   });
 }
 
-// ============================================================================
-// 工具
-// ============================================================================
-
 function extractModel(body: string | null): string {
   if (!body) return 'unknown';
   try { return JSON.parse(body).model || 'unknown'; } catch { return 'unknown'; }
@@ -128,7 +121,7 @@ function extractModel(body: string | null): string {
 
 function isStreamBody(body: string | null): boolean {
   if (!body) return false;
-  try { return JSON.parse(body).stream === true; } catch { return false; }
+  try { const j = JSON.parse(body); return j.stream === true; } catch { return false; }
 }
 
 function makeError(start: number, ttfb: number, errType: string, provider: string): ForwardResult {
