@@ -2,6 +2,7 @@
   "name": "token-local-route",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Local LLM API proxy with token usage statistics and dashboard",
   "bin": {
     "tlr": "bin/tlr.js"
