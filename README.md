@@ -19,6 +19,16 @@ pnpm dev
 
 第一次启动会自动生成 `~/.token-local-route/config.json`。
 
+### 安装 tlr 全局命令
+
+```bash
+# 项目目录下执行一次，之后任意目录直接 tlr 启动
+npm link
+
+# 启动代理
+tlr
+```
+
 ### 启动方式
 
 | 方式 | 命令 | 说明 |
